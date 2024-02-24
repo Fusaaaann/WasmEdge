@@ -115,6 +115,7 @@ if(BACKEND STREQUAL "ggml")
     message(STATUS "Downloading SIMDJSON source -- done")
   endif()
 endif()
+add_subdirectory(strategies)
 
 wasmedge_add_library(wasmedgePluginWasiNN
   SHARED
