@@ -1,3 +1,6 @@
+#include "ggml.h"
+#include "wasinnenv.h"
+
 #ifdef WASMEDGE_PLUGIN_WASI_NN_BACKEND_GGML
 #ifdef WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
 #include "simdjson.h"
@@ -9,19 +12,29 @@
 
 namespace WasmEdge::Host::WASINN::GGML {
 #ifdef WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
-// LLAMA_API defined in thirdparty/ggml/llama.h
- LLAMA_API float * wrapped_llama_get_logits_ith(struct llama_context * ctx, int32_t i);
- namespace Strategies {
-
-  #if WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY == SPECULATIVE
-  // speculative_decode();
-  #elif WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY == SPECULATIVE
-  // lookahead_decode();
-  #else
-  #endif // if WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
- }
+class IDecodingStrategy {
+/**
+ * maintained in ggml.h::Graph
+*/
 
 
+public:
+  virtual ~IDecodingStrategy() = default;
+  virtual ErrNo decode(Graph &GraphRef, Context &CxtRef) noexcept = 0;
+};
+class DefaultDecoding : public IDecodingStrategy {
+public:
+  ErrNo decode(Graph &GraphRef, Context &CxtRef) noexcept override;
+};
+class SpeculativeDecoding : public IDecodingStrategy {
+public:
+  ErrNo decode(Graph &GraphRef, Context &CxtRef) noexcept override;
+};
+
+class LookaheadDecoding : public IDecodingStrategy {
+public:
+  ErrNo decode(Graph &GraphRef, Context &CxtRef) noexcept override;
+};
 
 #endif // ifdef WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
 

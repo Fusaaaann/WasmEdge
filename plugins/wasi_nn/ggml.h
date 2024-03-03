@@ -17,10 +17,19 @@ struct WasiNNEnvironment;
 }
 
 namespace WasmEdge::Host::WASINN::GGML {
+enum speculative_strategy {
+  NONE,
+  SPECULATIVE,
+  LOOKAHEAD
+};
 
 #ifdef WASMEDGE_PLUGIN_WASI_NN_BACKEND_GGML
 struct Graph {
   llama_model *LlamaModel = nullptr;
+#ifdef WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
+  llama_model *DraftLlamaModel = nullptr;
+#endif // WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
+
   std::string ModelFilePath;
   // Plugin parameters:
   bool EnableLog = false;
@@ -31,9 +40,16 @@ struct Graph {
   std::string ReversePrompt;
   std::string MMProjModelPath;
   std::string ImagePath;
-  // Model parameters:
   int64_t MainGPU = 0; // Use GPU 0 by default
   int64_t NGPULayers = 0;
+#ifdef WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
+  enum speculative_strategy SpeculativeStrategy;
+  std::string StatisticsCSVPath;
+  std::string DraftModelPath; // only when SpeculativeStrategy == SPECULATIVE
+  // bool UseKV = false;
+  bool UseMMap = false;
+#endif // WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
+  // Model parameters:
   std::vector<float> TensorSplit;
   // Context parameters:
   uint64_t CtxSize;
@@ -45,6 +61,16 @@ struct Graph {
   double RepeatPenalty = 1.10;
   double PresencePenalty = 0.00;
   double FrequencyPenalty = 0.00;
+#ifdef WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
+  // speculative decoding, only when SpeculativeStrategy == SPECULATIVE
+  uint64_t NParallel = 1; 
+  double ProbAccept = 0.50;
+  double ProbSplit = 0.10;
+  // lookahead decoding
+  uint64_t LookaheadWidth = 15;
+  uint64_t NgramSize = 5;
+  uint64_t MaxVerifyNgramSize = 15;
+#endif // WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
 };
 
 struct Context {

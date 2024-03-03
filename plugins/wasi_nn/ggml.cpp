@@ -14,12 +14,24 @@
 #include <llama.h>
 #include <llava.h>
 #include <sstream>
+#ifdef WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
+#include "strategies/strategies.h"
 #endif
+#endif // WASMEDGE_PLUGIN_WASI_NN_BACKEND_GGML
+
 
 namespace WasmEdge::Host::WASINN::GGML {
 #ifdef WASMEDGE_PLUGIN_WASI_NN_BACKEND_GGML
 
 namespace details {
+speculative_strategy stringViewToSpeculativeStrategy(std::string_view strategy) {
+  if (strategy == "NONE"sv) return speculative_strategy::NONE;
+  if (strategy == "SPECULATIVE"sv) return speculative_strategy::SPECULATIVE;
+  if (strategy == "LOOKAHEAD"sv) return speculative_strategy::LOOKAHEAD;
+  spdlog::error("[WASI-NN] GGML backend: Unknown speculative strategy: {}, fallback to NONE..."sv, strategy);
+  return speculative_strategy::NONE; // Default or error value
+}
+
 Expect<ErrNo> parseMetadata(Graph &GraphRef, const std::string &Metadata,
                             bool *IsModelUpdated = nullptr) noexcept {
   simdjson::dom::parser Parser;
@@ -29,7 +41,7 @@ Expect<ErrNo> parseMetadata(Graph &GraphRef, const std::string &Metadata,
     spdlog::error("[WASI-NN] GGML backend: Parse metadata error"sv);
     return ErrNo::InvalidEncoding;
   }
-
+  // TODO: update doc after finalise
   // Get metadata from the json.
 
   // Currently supported metadata:
@@ -62,6 +74,9 @@ Expect<ErrNo> parseMetadata(Graph &GraphRef, const std::string &Metadata,
   ModelParams.n_gpu_layers = GraphRef.NGPULayers;
   ModelParams.main_gpu = GraphRef.MainGPU;
   ModelParams.tensor_split = GraphRef.TensorSplit.data();
+#ifdef WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
+  ModelParams.use_mmap = GraphRef.UseMMap;
+#endif // WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
 
   // The plugin parameters.
   if (Doc.at_key("enable-log").error() == simdjson::SUCCESS) {
@@ -97,6 +112,52 @@ Expect<ErrNo> parseMetadata(Graph &GraphRef, const std::string &Metadata,
       return ErrNo::InvalidArgument;
     }
   }
+#ifdef WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
+  if (Doc.at_key("speculative-strategy").error() == simdjson::SUCCESS) {
+    std::string_view strategy;
+    auto Err = Doc["speculative-strategy"].get<std::string_view>().get(strategy);
+    if (Err) {
+      spdlog::error(
+          "[WASI-NN] GGML backend: Unable to retrieve the speculative-strategy option."sv);
+      return ErrNo::InvalidArgument;
+    }
+    GraphRef.SpeculativeStrategy = stringViewToSpeculativeStrategy(strategy);
+  }
+  if (Doc.at_key("draft-model-path").error() == simdjson::SUCCESS) {
+    std::string_view DraftModelPath;
+    auto Err = Doc["draft-model-path"].get<std::string_view>().get(DraftModelPath);
+    if (Err) {
+      spdlog::error(
+          "[WASI-NN] GGML backend: Unable to retrieve the draft-model-path option."sv);
+      return ErrNo::InvalidArgument;
+    }
+    if (GraphRef.SpeculativeStrategy != speculative_strategy::SPECULATIVE){
+      spdlog::error(
+          "[WASI-NN] GGML backend: draft-model-path cannot be set when not using speculative decoding."sv);
+      return ErrNo::InvalidArgument;
+    }
+    GraphRef.DraftModelPath = DraftModelPath;
+    
+  }
+  // if (Doc.at_key("use-kv").error() == simdjson::SUCCESS) {
+  //   auto Err = Doc["use-kv"].get<bool>().get(GraphRef.UseKV);
+  //   if (Err) {
+  //     spdlog::error(
+  //         "[WASI-NN] GGML backend: Unable to retrieve the use-kv option."sv);
+  //     return ErrNo::InvalidArgument;
+  //   }
+  //   llama_log_set(nullptr, &GraphRef.UseKV);
+  // }
+  if (Doc.at_key("use-mmap").error() == simdjson::SUCCESS) {
+    auto Err = Doc["use-mmap"].get<bool>().get(GraphRef.UseMMap);
+    if (Err) {
+      spdlog::error(
+          "[WASI-NN] GGML backend: Unable to retrieve the use-mmap option."sv);
+      return ErrNo::InvalidArgument;
+    }
+    llama_log_set(nullptr, &GraphRef.UseMMap);
+  }
+#endif // ifdef WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
   if (Doc.at_key("n-predict").error() == simdjson::SUCCESS) {
     auto Err = Doc["n-predict"].get<uint64_t>().get(GraphRef.NPredict);
     if (Err) {
@@ -254,6 +315,100 @@ Expect<ErrNo> parseMetadata(Graph &GraphRef, const std::string &Metadata,
       return ErrNo::InvalidArgument;
     }
   }
+#ifdef WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
+  if (Doc.at_key("n-parallel").error() == simdjson::SUCCESS) {
+    uint64_t NParallel = 0;
+    auto Err = Doc["n-parallel"].get<uint64_t>().get(NParallel);
+    if (Err) {
+      spdlog::error(
+          "[WASI-NN] GGML backend: Unable to retrieve the n-parallel option."sv);
+      return ErrNo::InvalidArgument;
+    }
+    if (GraphRef.SpeculativeStrategy != speculative_strategy::SPECULATIVE){
+      spdlog::error(
+          "[WASI-NN] GGML backend: n-parallel cannot be set when not using speculative decoding."sv);
+      return ErrNo::InvalidArgument;
+    }
+    GraphRef.NParallel = NParallel;
+  }
+  if (Doc.at_key("prob-accept").error() == simdjson::SUCCESS) {
+    double ProbAccept = 0.0;
+    auto Err = Doc["prob-accept"].get<double>().get(ProbAccept);
+    if (Err) {
+      spdlog::error(
+          "[WASI-NN] GGML backend: Unable to retrieve the prob-accept option."sv);
+      return ErrNo::InvalidArgument;
+    }
+    if (GraphRef.SpeculativeStrategy != speculative_strategy::SPECULATIVE){
+      spdlog::error(
+          "[WASI-NN] GGML backend: prob-accept cannot be set when not using speculative decoding."sv);
+      return ErrNo::InvalidArgument;
+    }
+    GraphRef.ProbAccept = ProbAccept;
+  }
+  if (Doc.at_key("prob-split").error() == simdjson::SUCCESS) {
+    double ProbSplit = 0.0;
+    auto Err = Doc["prob-split"].get<double>().get(ProbSplit);
+    if (Err) {
+      spdlog::error(
+          "[WASI-NN] GGML backend: Unable to retrieve the prob-split option."sv);
+      return ErrNo::InvalidArgument;
+    }
+        if (GraphRef.SpeculativeStrategy != speculative_strategy::SPECULATIVE){
+      spdlog::error(
+          "[WASI-NN] GGML backend: prob-split cannot be set when not using speculative decoding."sv);
+      return ErrNo::InvalidArgument;
+    }
+    GraphRef.ProbSplit = ProbSplit;
+    GraphRef.ProbSplit = ProbSplit;
+  }
+  if (Doc.at_key("lookahead-width").error() == simdjson::SUCCESS) {
+    uint64_t LookaheadWidth = 0;
+    auto Err = Doc["lookahead-width"].get<uint64_t>().get(LookaheadWidth);
+    if (Err) {
+      spdlog::error(
+          "[WASI-NN] GGML backend: Unable to retrieve the lookahead-width option."sv);
+      return ErrNo::InvalidArgument;
+    }
+    if (GraphRef.SpeculativeStrategy != speculative_strategy::LOOKAHEAD){
+      spdlog::error(
+          "[WASI-NN] GGML backend: lookahead-width cannot be set when not using lookahead decoding."sv);
+      return ErrNo::InvalidArgument;
+    }
+    GraphRef.LookaheadWidth = LookaheadWidth;
+  }
+  if (Doc.at_key("ngram-size").error() == simdjson::SUCCESS) {
+    uint64_t NgramSize = 0;
+    auto Err = Doc["ngram-size"].get<uint64_t>().get(NgramSize);
+    if (Err) {
+      spdlog::error(
+          "[WASI-NN] GGML backend: Unable to retrieve the ngram-size option."sv);
+      return ErrNo::InvalidArgument;
+    }
+    if (GraphRef.SpeculativeStrategy != speculative_strategy::LOOKAHEAD){
+      spdlog::error(
+          "[WASI-NN] GGML backend: ngram-size cannot be set when not using lookahead decoding."sv);
+      return ErrNo::InvalidArgument;
+    }
+    GraphRef.NgramSize = NgramSize;
+  }
+  if (Doc.at_key("max-verify-ngram-size").error() == simdjson::SUCCESS) {
+    uint64_t MaxVerifyNgramSize = 0;
+    auto Err = Doc["max-verify-ngram-size"].get<uint64_t>().get(MaxVerifyNgramSize);
+    if (Err) {
+      spdlog::error(
+          "[WASI-NN] GGML backend: Unable to retrieve the max-verify-ngram-size option."sv);
+      return ErrNo::InvalidArgument;
+    }
+    if (GraphRef.SpeculativeStrategy != speculative_strategy::LOOKAHEAD){
+      spdlog::error(
+          "[WASI-NN] GGML backend: n-parallel cannot be set when not using lookahead decoding."sv);
+      return ErrNo::InvalidArgument;
+    }
+    GraphRef.MaxVerifyNgramSize = MaxVerifyNgramSize;
+  }
+#endif // ifdef WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
+
 
   // Check if the model is updated.
   if (IsModelUpdated && ModelParams.n_gpu_layers != GraphRef.NGPULayers) {
@@ -268,6 +423,7 @@ Expect<ErrNo> setupGPTParam(Graph &GraphRef, gpt_params &GPTParams) {
   GPTParams.sparams.top_p = GraphRef.TopP;
   GPTParams.sparams.penalty_repeat = GraphRef.RepeatPenalty;
   GPTParams.sparams.penalty_present = GraphRef.PresencePenalty;
+
   return ErrNo::Success;
 }
 
@@ -431,7 +587,6 @@ ErrNo evaluateTokens(Graph &GraphRef, struct llama_context *LlamaContext,
     }
     return ErrNo::ContextFull;
   }
-
   for (int I = 0; I < static_cast<int>(Tokens.size());
        I += GraphRef.BatchSize) {
     int NEval = static_cast<int>(Tokens.size()) - I;
@@ -442,9 +597,11 @@ ErrNo evaluateTokens(Graph &GraphRef, struct llama_context *LlamaContext,
     // This will return batch for single sequence of tokens starting at
     // position.
     const llama_seq_id SequenceId = 0;
-    auto Status =
-        llama_decode(LlamaContext,
-                     llama_batch_get_one(&Tokens[I], NEval, NPast, SequenceId));
+    // auto Status =
+    //     llama_decode(LlamaContext,
+    //                  llama_batch_get_one(&Tokens[I], NEval, NPast, SequenceId));
+    auto Batch = llama_batch_get_one(&Tokens[I], NEval, NPast, SequenceId);
+    auto Status = llama_decode(LlamaContext, Batch);
     if (Status == 1) {
       spdlog::error(
           "[WASI-NN] GGML backend: failed to llama_decode: try reducing the size of the batch or increasing the size of context"sv);
@@ -663,6 +820,13 @@ Expect<ErrNo> load(WasiNNEnvironment &Env, Span<const Span<uint8_t>> Builders,
   ModelParams.tensor_split = GraphRef.TensorSplit.data();
   GraphRef.LlamaModel =
       llama_load_model_from_file(GraphRef.ModelFilePath.c_str(), ModelParams);
+  #ifdef WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
+  if(GraphRef.SpeculativeStrategy == speculative_strategy::SPECULATIVE){
+    GraphRef.DraftLlamaModel =
+      llama_load_model_from_file(GraphRef.DraftModelPath.c_str(), ModelParams);
+  }
+
+  #endif // WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
   if (GraphRef.LlamaModel == nullptr) {
     spdlog::error("[WASI-NN] GGML backend: Error: unable to init model."sv);
     Env.NNGraph.pop_back();
@@ -738,6 +902,19 @@ Expect<ErrNo> setInput(WasiNNEnvironment &Env, uint32_t ContextId,
           Env.NNGraph.pop_back();
           return ErrNo::InvalidArgument;
         }
+#ifdef WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
+        if(GraphRef.SpeculativeStrategy == speculative_strategy::SPECULATIVE) {
+          llama_free_model(GraphRef.DraftLlamaModel);
+          GraphRef.DraftLlamaModel = llama_load_model_from_file(
+            GraphRef.DraftModelPath.c_str(), ModelParams);
+          if (GraphRef.DraftLlamaModel == nullptr) {
+            spdlog::error(
+                "[WASI-NN] GGML backend: Error: unable to init model."sv);
+            Env.NNGraph.pop_back();
+            return ErrNo::InvalidArgument;
+          }
+        }
+#endif // WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
       }
     }
 #endif
@@ -897,6 +1074,7 @@ Expect<ErrNo> getOutput(WasiNNEnvironment &Env, uint32_t ContextId,
 }
 
 Expect<ErrNo> compute(WasiNNEnvironment &Env, uint32_t ContextId) noexcept {
+#ifndef WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
   auto &CxtRef = Env.NNContext[ContextId].get<Context>();
   auto &GraphRef = Env.NNGraph[CxtRef.GraphId].get<Graph>();
   if (GraphRef.EnableDebugLog) {
@@ -1057,6 +1235,55 @@ Expect<ErrNo> compute(WasiNNEnvironment &Env, uint32_t ContextId) noexcept {
   }
 
   return ReturnCode;
+#else
+  auto &CxtRef = Env.NNContext[ContextId].get<Context>();
+  auto &GraphRef = Env.NNGraph[CxtRef.GraphId].get<Graph>();
+  if (GraphRef.EnableDebugLog) {
+    spdlog::info("[WASI-NN][Debug] GGML backend: compute"sv);
+  }
+
+  if (GraphRef.Embedding) {
+    return details::getEmbedding(Env, ContextId);
+  }
+
+  if (CxtRef.LlamaInputs.size() == 0) {
+    spdlog::error("[WASI-NN] GGML backend: Llama input is not set!"sv);
+    return ErrNo::InvalidArgument;
+  }
+
+  // Clear the outputs.
+  if (GraphRef.EnableDebugLog) {
+    spdlog::info(
+        "[WASI-NN][Debug] GGML backend: clear the previous output and tokens"sv);
+  }
+  CxtRef.LlamaOutputs.clear();
+  CxtRef.LlamaOutputTokens.clear();
+  if (GraphRef.EnableDebugLog) {
+    spdlog::info(
+        "[WASI-NN][Debug] GGML backend: clear the previous output and tokens...Done"sv);
+  }
+  std::vector<int64_t> IntertokenTimestamp;
+  // Initialize the llama context.
+      if (GraphRef.Embedding) {
+    return details::getEmbedding(Env, ContextId);
+  }
+  std::unique_ptr<IDecodingStrategy> strategy;
+  if (GraphRef.SpeculativeStrategy == speculative_strategy::SPECULATIVE) {
+    strategy = std::make_unique<SpeculativeDecoding>();
+  }else if (GraphRef.SpeculativeStrategy == speculative_strategy::LOOKAHEAD) {
+    strategy = std::make_unique<LookaheadDecoding>();
+  } else {
+    strategy = std::make_unique<DefaultDecoding>();
+  }
+
+  // Use the strategy to perform decoding
+    // Return value.
+  auto ReturnCode = ErrNo::Success;
+  ReturnCode = strategy->decode(GraphRef, CxtRef);
+
+  // TODO: submit stats into OpenTelemetry
+  return ReturnCode;
+#endif // WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
 }
 
 Expect<ErrNo> getOutputSingle(WasiNNEnvironment &Env, uint32_t ContextId,
@@ -1118,6 +1345,7 @@ Expect<ErrNo> computeSingle(WasiNNEnvironment &Env,
     details::setupContextParam(GraphRef, ContextParams);
     CxtRef.LlamaContext =
         llama_new_context_with_model(GraphRef.LlamaModel, ContextParams);
+    // TODO: llama_batch_init
     CxtRef.LlamaSampling = llama_sampling_init(GPTParams.sparams);
     CxtRef.LlamaNPast = 0;
 
@@ -1187,10 +1415,12 @@ Expect<ErrNo> computeSingle(WasiNNEnvironment &Env,
   if (GraphRef.EnableDebugLog) {
     spdlog::info("[WASI-NN][Debug] GGML backend: enter main predict process"sv);
   }
+
   auto ReturnCode = ErrNo::Success;
   const llama_token Id =
       llama_sampling_sample(CxtRef.LlamaSampling, CxtRef.LlamaContext, nullptr);
   llama_sampling_accept(CxtRef.LlamaSampling, CxtRef.LlamaContext, Id, true);
+
 
   // Save the output token.
   // In single token mode, we do not handle StreamStdout and ReversePrompt.
@@ -1266,7 +1496,6 @@ Expect<ErrNo> finiSingle(WasiNNEnvironment &Env, uint32_t ContextId) noexcept {
 
   return ErrNo::Success;
 }
-
 #else
 namespace {
 Expect<ErrNo> reportBackendNotSupported() noexcept {
