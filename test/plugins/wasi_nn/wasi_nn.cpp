@@ -1221,6 +1221,7 @@ TEST(WasiNNTest, GGMLBackend) {
   // Create the wasmedge_process module instance.
   auto *NNMod = dynamic_cast<WasmEdge::Host::WasiNNModule *>(createModule());
   EXPECT_FALSE(NNMod == nullptr);
+  spdlog::info("createModule() done"sv);
 
   // Create the calling frame with memory instance.
   WasmEdge::Runtime::Instance::ModuleInstance Mod("");
@@ -1231,12 +1232,14 @@ TEST(WasiNNTest, GGMLBackend) {
   ASSERT_TRUE(MemInstPtr != nullptr);
   auto &MemInst = *MemInstPtr;
   WasmEdge::Runtime::CallingFrame CallFrame(nullptr, &Mod);
+  spdlog::info("CallFrame(nullptr, &Mod) done"sv);
 
   // Load the files.
   std::string Prompt = "Once upon a time, ";
   std::vector<uint8_t> TensorData(Prompt.begin(), Prompt.end());
   std::vector<uint8_t> WeightRead =
       readEntireFile("./wasinn_ggml_fixtures/orca_mini.gguf");
+  spdlog::info("Load the files. done"sv);
 
   std::vector<uint32_t> TensorDim{1};
   uint32_t BuilderPtr = UINT32_C(0);
@@ -1254,30 +1257,35 @@ TEST(WasiNNTest, GGMLBackend) {
   EXPECT_TRUE(FuncInst->isHostFunction());
   auto &HostFuncLoad =
       dynamic_cast<WasmEdge::Host::WasiNNLoad &>(FuncInst->getHostFunc());
+  spdlog::info("HostFuncLoad done"sv);
   // Get the function "init_execution_context".
   FuncInst = NNMod->findFuncExports("init_execution_context");
   EXPECT_NE(FuncInst, nullptr);
   EXPECT_TRUE(FuncInst->isHostFunction());
   auto &HostFuncInit = dynamic_cast<WasmEdge::Host::WasiNNInitExecCtx &>(
       FuncInst->getHostFunc());
+  spdlog::info("HostFuncInit done"sv);
   // Get the function "set_input".
   FuncInst = NNMod->findFuncExports("set_input");
   EXPECT_NE(FuncInst, nullptr);
   EXPECT_TRUE(FuncInst->isHostFunction());
   auto &HostFuncSetInput =
       dynamic_cast<WasmEdge::Host::WasiNNSetInput &>(FuncInst->getHostFunc());
+  spdlog::info("HostFuncSetInput done"sv);
   // Get the function "get_output".
   FuncInst = NNMod->findFuncExports("get_output");
   EXPECT_NE(FuncInst, nullptr);
   EXPECT_TRUE(FuncInst->isHostFunction());
   auto &HostFuncGetOutput =
       dynamic_cast<WasmEdge::Host::WasiNNGetOutput &>(FuncInst->getHostFunc());
+  spdlog::info("HostFuncGetOutput done"sv);
   // Get the function "compute".
   FuncInst = NNMod->findFuncExports("compute");
   EXPECT_NE(FuncInst, nullptr);
   EXPECT_TRUE(FuncInst->isHostFunction());
   auto &HostFuncCompute =
       dynamic_cast<WasmEdge::Host::WasiNNCompute &>(FuncInst->getHostFunc());
+  spdlog::info("HostFuncCompute done"sv);
 
   // GGML WASI-NN load tests.
   // Test: load -- meaningless binaries.
@@ -1291,6 +1299,7 @@ TEST(WasiNNTest, GGMLBackend) {
     EXPECT_EQ(Errno[0].get<int32_t>(),
               static_cast<uint32_t>(ErrNo::InvalidArgument));
   }
+  spdlog::info("load -- meaningless binaries done"sv);
 
   // Test: load -- graph id ptr out of bounds.
   {
@@ -1303,6 +1312,7 @@ TEST(WasiNNTest, GGMLBackend) {
     EXPECT_EQ(Errno[0].get<int32_t>(),
               static_cast<uint32_t>(ErrNo::InvalidArgument));
   }
+  spdlog::info("load -- graph id ptr out of bounds done"sv);
 
   // Test: load -- graph builder ptr out of bounds.
   {
@@ -1315,6 +1325,7 @@ TEST(WasiNNTest, GGMLBackend) {
     EXPECT_EQ(Errno[0].get<int32_t>(),
               static_cast<uint32_t>(ErrNo::InvalidArgument));
   }
+  spdlog::info("load -- graph builder ptr out of bounds done"sv);
 
   // Test: load -- GGML model bin ptr out of bounds.
   BuilderPtr = LoadEntryPtr;
@@ -1329,6 +1340,7 @@ TEST(WasiNNTest, GGMLBackend) {
     EXPECT_EQ(Errno[0].get<int32_t>(),
               static_cast<uint32_t>(ErrNo::InvalidArgument));
   }
+  spdlog::info("GGML model bin ptr out of bounds. done"sv);
 
   // Test: load -- wrong metadata encoding when builders length > 1.
   BuilderPtr = LoadEntryPtr;
@@ -1345,6 +1357,7 @@ TEST(WasiNNTest, GGMLBackend) {
     EXPECT_EQ(Errno[0].get<int32_t>(),
               static_cast<uint32_t>(ErrNo::InvalidEncoding));
   }
+  spdlog::info("wrong metadata encoding when builders length > 1 done"sv);
 
   // Test: load -- load successfully.
   {
@@ -1358,6 +1371,7 @@ TEST(WasiNNTest, GGMLBackend) {
     EXPECT_EQ(*MemInst.getPointer<uint32_t *>(BuilderPtr), 0);
     BuilderPtr += 4;
   }
+  spdlog::info("load -- load successfully. done"sv);
 
   // GGML WASI-NN init_execution_context tests.
   // Test: init_execution_context -- graph id invalid.

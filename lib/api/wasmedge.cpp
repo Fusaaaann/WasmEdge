@@ -3255,8 +3255,10 @@ WasmEdge_PluginInitWASINN(const char *const *NNPreloads,
                           const uint32_t PreloadsLen) {
   using namespace std::literals::string_view_literals;
   if (const auto *Plugin = WasmEdge::Plugin::Plugin::find("wasi_nn"sv)) {
+    spdlog::info("[WASI-NN] before argument parser"sv);
     PO::ArgumentParser Parser;
     Plugin->registerOptions(Parser);
+    spdlog::info("[WASI-NN] before set_raw_value"sv);
     Parser.set_raw_value<std::vector<std::string>>(
         "nn-preload"sv,
         std::vector<std::string>(NNPreloads, NNPreloads + PreloadsLen));

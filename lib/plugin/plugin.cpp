@@ -322,7 +322,6 @@ WASMEDGE_EXPORT bool Plugin::load(const std::filesystem::path &Path) noexcept {
   auto Status = std::filesystem::status(Path, Error);
   if (likely(!Error)) {
     if (std::filesystem::is_directory(Status)) {
-
       bool Result = false;
       for (const auto &Entry : std::filesystem::recursive_directory_iterator(
                Path, std::filesystem::directory_options::skip_permission_denied,
@@ -337,7 +336,8 @@ WASMEDGE_EXPORT bool Plugin::load(const std::filesystem::path &Path) noexcept {
     } else if (std::filesystem::is_regular_file(Status) &&
                Path.extension().u8string() == WASMEDGE_LIB_EXTENSION) {
       return loadFile(Path);
-    }
+    } 
+    else spdlog::error("Path: {} ; not exist!"sv, Path);
   }
   return false;
 }
@@ -386,6 +386,7 @@ void Plugin::addPluginOptions(PO::ArgumentParser &Parser) noexcept {
 
 WASMEDGE_EXPORT const Plugin *Plugin::find(std::string_view Name) noexcept {
   if (NiftyCounter != 0) {
+    printf("\tNiftyCounter not 0\n");
     if (auto Iter = PluginNameLookup.find(Name);
         Iter != PluginNameLookup.end()) {
       return std::addressof(PluginRegistry[Iter->second]);
