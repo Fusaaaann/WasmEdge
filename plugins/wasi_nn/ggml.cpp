@@ -14,6 +14,7 @@
 #include <llama.h>
 #include <llava.h>
 #include <sstream>
+#include "spdlog/sinks/basic_file_sink.h"
 #ifdef WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
 #include "strategies/strategies.h"
 #endif
@@ -30,6 +31,17 @@ speculative_strategy stringViewToSpeculativeStrategy(std::string_view strategy) 
   if (strategy == "LOOKAHEAD"sv) return speculative_strategy::LOOKAHEAD;
   spdlog::error("[WASI-NN] GGML backend: Unknown speculative strategy: {}, fallback to NONE..."sv, strategy);
   return speculative_strategy::NONE; // Default or error value
+}
+std::string getMetricsFilename(const std::string& parentDir = ".") {
+    // Get current time
+    auto now_time_t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm now_tm = *std::localtime(&now_time_t);
+    
+    // Format current time and create file name
+    std::ostringstream oss;
+    oss << parentDir << "/compute-" << std::put_time(&now_tm, "%Y%m%d%H%M") << ".csv";
+    
+    return oss.str();
 }
 
 Expect<ErrNo> parseMetadata(Graph &GraphRef, const std::string &Metadata,
@@ -850,11 +862,16 @@ Expect<ErrNo> initExecCtx(WasiNNEnvironment &Env, uint32_t GraphId,
                           uint32_t &ContextId) noexcept {
   Env.NNContext.emplace_back(GraphId, Env.NNGraph[GraphId]);
   ContextId = Env.NNContext.size() - 1;
+  
   auto &GraphRef = Env.NNGraph[GraphId].get<Graph>();
   if (GraphRef.EnableLog) {
     spdlog::info("[WASI-NN] GGML backend: llama_system_info: {}"sv,
                  llama_print_system_info());
   }
+  auto basic_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(details::getMetricsFilename("~"));
+std::vector<spdlog::sink_ptr> sinks{basic_sink};
+auto metrics_logger = std::make_shared<spdlog::logger>("metrics", sinks.begin(), sinks.end()); 
+spdlog::register_logger(metrics_logger); 
   return ErrNo::Success;
 }
 
@@ -1282,7 +1299,8 @@ Expect<ErrNo> compute(WasiNNEnvironment &Env, uint32_t ContextId) noexcept {
   auto ReturnCode = ErrNo::Success;
   ReturnCode = strategy->decode(GraphRef, CxtRef);
 
-  // TODO: submit stats into OpenTelemetry
+  // spdlog::get("metrics")->flush_on(spdlog::level::info); // if want a view before flush (?)
+  spdlog::get("metrics")->flush();
   return ReturnCode;
 #endif // WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
 }

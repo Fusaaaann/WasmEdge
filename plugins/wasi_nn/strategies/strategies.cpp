@@ -347,6 +347,7 @@ ErrNo SpeculativeDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
 
   GPTParams.sparams.grammar.clear(); // the draft samplers will copy the target sampler's grammar
   GPTParams.sparams.temp = -1.0f;    // force greedy sampling with probs for the draft model
+  spdlog::get("metrics")->trace("{\"event\":\"decode_start\", \"time\":{},\"attribute\":{\"strategy\":\"SPECULATIVE\"}}",ggml_time_us());
 
   for (int s = 0; s < n_seq_dft; ++s) {
       drafts[s].CtxSampling = llama_sampling_init(GPTParams.sparams);
@@ -429,7 +430,6 @@ ErrNo SpeculativeDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
 
           // spdlog::info("the sampled target token ({}, '{}') did not match, or we ran out of drafted tokens\n"sv, id, token_str.c_str());
 
-          // TODO: simplify
           {
               spdlog::info("keeping sequence {}, n_past_tgt = {}, n_past_dft = {}\n"sv, s_keep, n_past_tgt, n_past_dft);
 
@@ -611,8 +611,10 @@ ErrNo SpeculativeDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
           drafts[s].tokens.erase(drafts[s].tokens.begin());
       }
     // TELEMETRY: ONE TOKEN DONE
+    spdlog::get("metrics")->trace("{\"event\":\"decoded_one_token\", \"time\":{},\"attribute\":{\"strategy\":\"SPECULATIVE\"}}",ggml_time_us());
   }
   // TELEMETRY: DECODE DONE
+  spdlog::get("metrics")->trace("{\"event\":\"decode_done\", \"time\":{},\"attribute\":{\"strategy\":\"SPECULATIVE\"}",ggml_time_us());
   // auto t_dec_end = ggml_time_us();
   llama_sampling_free(CtxSampling);
   for (int s = 0; s < n_seq_dft; ++s) {
@@ -630,7 +632,6 @@ ErrNo SpeculativeDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
   return ErrNo::Success;
 }
 
-// TODO: undefined symbol: _ZTVN8WasmEdge4Host6WASINN4GGML17LookaheadDecodingE
 
 ErrNo LookaheadDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
   gpt_params GPTParams;
