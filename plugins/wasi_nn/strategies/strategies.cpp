@@ -114,10 +114,10 @@ ErrNo setupContextParam(Graph &GraphRef,
 }
 
 ErrNo DefaultDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
-gpt_params GPTParams;
-llama_context_params ContextParams = llama_context_default_params();
-details2::setupGPTParam(GraphRef, GPTParams);
-details2::setupContextParam(GraphRef, ContextParams);
+  gpt_params GPTParams;
+  llama_context_params ContextParams = llama_context_default_params();
+  details2::setupGPTParam(GraphRef, GPTParams);
+  details2::setupContextParam(GraphRef, ContextParams);
   auto LlamaContext =
       llama_new_context_with_model(GraphRef.LlamaModel, ContextParams);
   struct llama_sampling_context *CtxSampling =
@@ -143,14 +143,17 @@ details2::setupContextParam(GraphRef, ContextParams);
   }
 
   // Assume text only prompt.
+  spdlog::info("[WASI-NN][Debug] GGML backend: before evaluate tokens"sv);
   ReturnCode = details2::evaluateTokens(GraphRef, LlamaContext,
                                       CxtRef.LlamaInputs, NPast);
+  spdlog::info("[WASI-NN][Debug] GGML backend: done evaluate tokens"sv);
   if (ReturnCode != ErrNo::Success) {
   spdlog::error(
       "[WASI-NN] GGML backend: failed to evaluate input tokens."sv);
   return ReturnCode;
   }
   // Main predict loop.
+  spdlog::info("[WASI-NN][Debug] GGML backend: enter main predict loop"sv);
   if (GraphRef.EnableDebugLog) {
       spdlog::info("[WASI-NN][Debug] GGML backend: enter main predict loop"sv);
   }
@@ -210,7 +213,6 @@ details2::setupContextParam(GraphRef, ContextParams);
   }
 
   return ReturnCode;
-  return ErrNo::Success;
 }
 ErrNo SpeculativeDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
   gpt_params GPTParams;
@@ -608,8 +610,9 @@ ErrNo SpeculativeDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
 
           drafts[s].tokens.erase(drafts[s].tokens.begin());
       }
+    // TELEMETRY: ONE TOKEN DONE
   }
-
+  // TELEMETRY: DECODE DONE
   // auto t_dec_end = ggml_time_us();
   llama_sampling_free(CtxSampling);
   for (int s = 0; s < n_seq_dft; ++s) {

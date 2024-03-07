@@ -1268,6 +1268,7 @@ Expect<ErrNo> compute(WasiNNEnvironment &Env, uint32_t ContextId) noexcept {
     return details::getEmbedding(Env, ContextId);
   }
   std::unique_ptr<IDecodingStrategy> strategy;
+  spdlog::info("[WASI-NN][Debug] GGML backend: starting decode, strategy is {}"sv, (int)GraphRef.SpeculativeStrategy);
   if (GraphRef.SpeculativeStrategy == speculative_strategy::SPECULATIVE) {
     strategy = std::make_unique<SpeculativeDecoding>();
   }else if (GraphRef.SpeculativeStrategy == speculative_strategy::LOOKAHEAD) {

@@ -12,12 +12,9 @@
 
 namespace WasmEdge::Host::WASINN::GGML {
 #ifdef WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
+
+void RecordMetric(const std::string& name, double value);
 class IDecodingStrategy {
-/**
- * maintained in ggml.h::Graph
-*/
-
-
 public:
   virtual ~IDecodingStrategy() = default;
   virtual ErrNo decode(Graph &GraphRef, Context &CxtRef) noexcept = 0;
