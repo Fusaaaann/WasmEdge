@@ -386,7 +386,6 @@ void Plugin::addPluginOptions(PO::ArgumentParser &Parser) noexcept {
 
 WASMEDGE_EXPORT const Plugin *Plugin::find(std::string_view Name) noexcept {
   if (NiftyCounter != 0) {
-    printf("\tNiftyCounter not 0\n");
     if (auto Iter = PluginNameLookup.find(Name);
         Iter != PluginNameLookup.end()) {
       return std::addressof(PluginRegistry[Iter->second]);

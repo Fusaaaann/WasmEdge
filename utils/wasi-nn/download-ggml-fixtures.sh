@@ -7,7 +7,7 @@ if [[ $# -eq 0 ]]; then
 fi
 MODEL=orca_mini.gguf
 FIXTURE=https://huggingface.co/TheBloke/orca_mini_v3_7B-GGUF/resolve/main/orca_mini_v3_7b.Q2_K.gguf
-LOCAL_FIXTURE=/home/pi/code/orca_mini_v3_7b.Q2_K.gguf
+LOCAL_FIXTURE=/media/pi/3cee088a-01af-4a5f-9c21-c128bf12d943/orca_mini_v3_7b.Q2_K.gguf
 if [ ! -d $TODIR ]; then
     mkdir $TODIR
 fi

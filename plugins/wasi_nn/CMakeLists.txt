@@ -110,60 +110,6 @@ if(BACKEND STREQUAL "ggml")
     endif()
   endif()
 
-  # find_package(opentelemetry-cpp CONFIG REQUIRED) 
-  # Add the installation prefix of "opentelemetry-cpp" to CMAKE_PREFIX_PATH or
-  # set "opentelemetry-cpp_DIR" to a directory containing one of the above
-  # files.  If "opentelemetry-cpp" provides a separate development package or
-  # SDK, be sure it has been installed.
-  # if(opentelemetry-cpp_FOUND)
-  #   message(STATUS "opentelemetry-cpp found")
-  # else()
-  #   message(STATUS "Downloading opentelemetry-cpp source")
-  #   include(FetchContent)
-  #   FetchContent_Declare(
-  #     opentelemetry-cpp
-  #     GIT_REPOSITORY https://github.com/open-telemetry/opentelemetry-cpp.git
-  #     GIT_TAG  tags/v3.2.1
-  #     GIT_SHALLOW TRUE)
-
-  #   if(MSVC)
-  #     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  #       get_property(
-  #         compile_options
-  #         DIRECTORY
-  #         PROPERTY COMPILE_OPTIONS
-  #         )
-  #       set_property(
-  #         DIRECTORY
-  #         APPEND
-  #         PROPERTY COMPILE_OPTIONS
-  #         -Wno-undef
-  #         -Wno-suggest-override
-  #         -Wno-documentation
-  #         -Wno-sign-conversion
-  #         -Wno-extra-semi-stmt
-  #         -Wno-old-style-cast
-  #         -Wno-error=unused-parameter
-  #         -Wno-error=unused-template
-  #         -Wno-conditional-uninitialized
-  #         -Wno-implicit-int-conversion
-  #         -Wno-shorten-64-to-32
-  #         -Wno-range-loop-bind-reference
-  #         -Wno-format-nonliteral
-  #         -Wno-unused-exception-parameter
-  #         -Wno-unused-member-function
-  #         )
-  #       unset(compile_options)
-  #     elseif(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-  #       set_property(
-  #         DIRECTORY
-  #         APPEND
-  #         PROPERTY COMPILE_OPTIONS
-  #         /wd4100 # unreferenced formal parameter
-  #         )
-  #     endif()
-  #   endif()
-  # endif()
 
 
   # setup GGML strategies

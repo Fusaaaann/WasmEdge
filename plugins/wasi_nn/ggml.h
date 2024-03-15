@@ -44,7 +44,7 @@ struct Graph {
   int64_t NGPULayers = 0;
 #ifdef WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
   enum speculative_strategy SpeculativeStrategy;
-  std::string StatisticsCSVPath;
+  std::string StatsLogPath;
   std::string DraftModelPath; // only when SpeculativeStrategy == SPECULATIVE
   // bool UseKV = false;
   bool UseMMap = false;
@@ -88,6 +88,37 @@ public:
   // Preserve for llava
   struct llava_image_embed *LlavaImageEmbd = nullptr;
   size_t LlavaImagePosition = 0;
+};
+
+// credit: https://github.com/gabime/spdlog/issues/1797#issuecomment-1013537052
+namespace {
+  template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+  template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
+}
+
+struct SimpleJSON
+{
+  using json_val = std::variant<uint64_t,int64_t, int, double, std::string, bool>;
+  std::unordered_map<std::string, json_val> members;
+
+  SimpleJSON(std::initializer_list<std::pair<const std::string, json_val>> il) : members{il} {}
+
+  template<typename OStream>
+  friend OStream &operator<<(OStream &os, const SimpleJSON &j)
+  {
+    for (const auto &kv : j.members) {
+      os << ", " << std::quoted(kv.first) << ":";
+      std::visit(overloaded {
+        [&](uint64_t arg) { os << arg; },
+        [&](int64_t arg) { os << arg; },
+        [&](int arg) { os << arg; },
+        [&](double arg) { os << arg; },
+        [&](const std::string& arg) { os << std::quoted(arg); },
+        [&](bool arg) { os << (arg ? "true" : "false"); }
+      }, kv.second);
+    }
+    return os;
+  }
 };
 #else
 struct Graph {};

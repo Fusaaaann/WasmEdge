@@ -4,6 +4,7 @@
 #include "strategies.h"
 #include <llama.h>
 #include "simdjson.h"
+#include "spdlog/fmt/ostr.h"
 
 namespace WasmEdge::Host::WASINN::GGML {
 
@@ -75,11 +76,14 @@ ErrNo evaluateTokens(Graph &GraphRef, struct llama_context *LlamaContext,
     if (NEval > static_cast<int>(GraphRef.BatchSize)) {
       NEval = GraphRef.BatchSize;
     }
+    // spdlog::info("done check NEval {}"sv,NEval);
     const llama_seq_id SequenceId = 0;
-
     auto Batch = llama_batch_get_one(&Tokens[I], NEval, NPast, SequenceId);
+    // spdlog::info("done llama_batch_get_one"sv);
+    // spdlog::info("LlamaContext {}"sv,(LlamaContext==nullptr?"null":"not null"));
     auto Status =
         llama_decode(LlamaContext, Batch);
+    // spdlog::info("done llama_decode"sv);
     if (Status == 1) {
       spdlog::error(
           "[WASI-NN] GGML backend: failed to llama_decode: try reducing the size of the batch or increasing the size of context"sv);
@@ -143,55 +147,67 @@ ErrNo DefaultDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
   }
 
   // Assume text only prompt.
-  spdlog::info("[WASI-NN][Debug] GGML backend: before evaluate tokens"sv);
+  // spdlog::info("[WASI-NN][Debug] GGML backend: before evaluate tokens"sv);
+  // spdlog::info("LlamaContext: {} CxtRef.LlamInputs.size: {}"sv,
+    // (LlamaContext==nullptr?"null":"not null"),
+    // CxtRef.LlamaInputs.size()
+    // );
   ReturnCode = details2::evaluateTokens(GraphRef, LlamaContext,
                                       CxtRef.LlamaInputs, NPast);
-  spdlog::info("[WASI-NN][Debug] GGML backend: done evaluate tokens"sv);
+  // spdlog::info("[WASI-NN][Debug] GGML backend: done evaluate tokens"sv);
   if (ReturnCode != ErrNo::Success) {
   spdlog::error(
       "[WASI-NN] GGML backend: failed to evaluate input tokens."sv);
   return ReturnCode;
   }
   // Main predict loop.
-  spdlog::info("[WASI-NN][Debug] GGML backend: enter main predict loop"sv);
+  // spdlog::info("[WASI-NN][Debug] GGML backend: enter main predict loop"sv);
   if (GraphRef.EnableDebugLog) {
       spdlog::info("[WASI-NN][Debug] GGML backend: enter main predict loop"sv);
   }
   while (NRemain > 0) {
-      const llama_token Id =
-          llama_sampling_sample(CtxSampling, LlamaContext, nullptr);
-      llama_sampling_accept(CtxSampling, LlamaContext, Id, true);
-      --NRemain;
+    const llama_token Id =
+        llama_sampling_sample(CtxSampling, LlamaContext, nullptr);
+    llama_sampling_accept(CtxSampling, LlamaContext, Id, true);
+    --NRemain;
 
-      // Save the output token.
-      CxtRef.LlamaOutputTokens.emplace_back(Id);
-      CxtRef.LlamaOutputs += llama_token_to_piece(LlamaContext, Id);
-      // When setting StreamStdout, we print the output to stdout.
-      if (GraphRef.StreamStdout) {
-      std::cout << llama_token_to_piece(LlamaContext, Id) << std::flush;
-      }
-      // Break if reverse prompt is found.
-      if (!GraphRef.ReversePrompt.empty() &&
-          CxtRef.LlamaOutputs.find(GraphRef.ReversePrompt) != std::string::npos) {
+    // Save the output token.
+    CxtRef.LlamaOutputTokens.emplace_back(Id);
+    CxtRef.LlamaOutputs += llama_token_to_piece(LlamaContext, Id);
+    // When setting StreamStdout, we print the output to stdout.
+    if (GraphRef.StreamStdout) {
+    std::cout << llama_token_to_piece(LlamaContext, Id) << std::flush;
+    }
+    // Break if reverse prompt is found.
+    if (!GraphRef.ReversePrompt.empty() &&
+        CxtRef.LlamaOutputs.find(GraphRef.ReversePrompt) != std::string::npos) {
       if (GraphRef.EnableLog) {
           spdlog::info("[WASI-NN] GGML backend: reverse prompt found"sv);
       }
       break;
-      }
-      // Deal with end of text token.
-      if (llama_sampling_last(CtxSampling) ==
-          llama_token_eos(GraphRef.LlamaModel)) {
+    }
+    // Deal with end of text token.
+    if (llama_sampling_last(CtxSampling) ==
+        llama_token_eos(GraphRef.LlamaModel)) {
       if (GraphRef.EnableLog) {
           spdlog::info("[WASI-NN] GGML backend: EOS token found"sv);
       }
       break;
-      }
-      // Evaluate the output token.
-      ReturnCode = details2::evaluateTokens(GraphRef, LlamaContext, {Id}, NPast);
-      if (ReturnCode != ErrNo::Success) {
+    }
+    // Evaluate the output token.
+    ReturnCode = details2::evaluateTokens(GraphRef, LlamaContext, {Id}, NPast);
+    if (ReturnCode != ErrNo::Success) {
       break;
-      }
+    }
+    spdlog::get("metrics")->trace("{}"sv, SimpleJSON({
+        {"event", "decoded_one_batch"},
+        {"ggml_time", ggml_time_us()}
+    })); 
   }
+  spdlog::get("metrics")->trace("{}"sv, SimpleJSON({
+      {"event", "decode_done"},
+      {"ggml_time", ggml_time_us()}
+  }));  
   if (GraphRef.EnableDebugLog) {
       spdlog::info(
           "[WASI-NN][Debug] GGML backend: enter main predict loop...Done"sv);
@@ -313,6 +329,7 @@ ErrNo SpeculativeDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
   fflush(stderr);
 
   const int n_input = inp.size();
+  spdlog::info("[WASI-NN][Debug] GGML backend: n_input {}"sv,n_input);
 
   // const auto t_enc_start = ggml_time_us();
 
@@ -347,7 +364,10 @@ ErrNo SpeculativeDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
 
   GPTParams.sparams.grammar.clear(); // the draft samplers will copy the target sampler's grammar
   GPTParams.sparams.temp = -1.0f;    // force greedy sampling with probs for the draft model
-  spdlog::get("metrics")->trace("{\"event\":\"decode_start\", \"time\":{},\"attribute\":{\"strategy\":\"SPECULATIVE\"}}",ggml_time_us());
+    spdlog::get("metrics")->trace("{}"sv, SimpleJSON({
+        {"event", "decode_start"},
+        {"ggml_time", ggml_time_us()}
+    })); 
 
   for (int s = 0; s < n_seq_dft; ++s) {
       drafts[s].CtxSampling = llama_sampling_init(GPTParams.sparams);
@@ -610,11 +630,15 @@ ErrNo SpeculativeDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
 
           drafts[s].tokens.erase(drafts[s].tokens.begin());
       }
-    // TELEMETRY: ONE TOKEN DONE
-    spdlog::get("metrics")->trace("{\"event\":\"decoded_one_token\", \"time\":{},\"attribute\":{\"strategy\":\"SPECULATIVE\"}}",ggml_time_us());
+    spdlog::get("metrics")->trace("{}"sv, SimpleJSON({
+        {"event", "decoded_one_batch"},
+        {"ggml_time", ggml_time_us()}
+    }));  
   }
-  // TELEMETRY: DECODE DONE
-  spdlog::get("metrics")->trace("{\"event\":\"decode_done\", \"time\":{},\"attribute\":{\"strategy\":\"SPECULATIVE\"}",ggml_time_us());
+  spdlog::get("metrics")->trace("{}"sv, SimpleJSON({
+      {"event", "decode_done"},
+      {"ggml_time", ggml_time_us()}
+  }));  
   // auto t_dec_end = ggml_time_us();
   llama_sampling_free(CtxSampling);
   for (int s = 0; s < n_seq_dft; ++s) {
@@ -1031,7 +1055,16 @@ ErrNo LookaheadDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
               llama_kv_cache_seq_cp(LlamaContext, 0, s, -1, -1);
           }
       }
+    spdlog::get("metrics")->trace("{}"sv, SimpleJSON({
+        {"event", "decoded_one_batch"},
+        {"ggml_time", ggml_time_us()}
+    })); 
+
   }
+  spdlog::get("metrics")->trace("{}"sv, SimpleJSON({
+      {"event", "decode_done"},
+      {"ggml_time", ggml_time_us()}
+  }));  
 
   // auto t_dec_end = ggml_time_us();
   llama_kv_cache_view_free(&KVCView);
