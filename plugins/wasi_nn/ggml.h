@@ -38,6 +38,7 @@ struct Graph {
   // Context parameters:
   uint64_t CtxSize;
   uint64_t BatchSize;
+  uint64_t UBatchSize;
   uint64_t Threads;
   // Sampling parameters:
   double Temp = 0.80;
@@ -96,4 +97,6 @@ Expect<WASINN::ErrNo> computeSingle(WASINN::WasiNNEnvironment &Env,
                                     uint32_t ContextId) noexcept;
 Expect<WASINN::ErrNo> finiSingle(WASINN::WasiNNEnvironment &Env,
                                  uint32_t ContextId) noexcept;
+Expect<WASINN::ErrNo> unload(WASINN::WasiNNEnvironment &Env,
+                             uint32_t GraphId) noexcept;
 } // namespace WasmEdge::Host::WASINN::GGML

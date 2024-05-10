@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "common/log.h"
+#include "common/spdlog.h"
 #include "plugin/plugin.h"
 #include <cstdint>
 #include <functional>
@@ -166,6 +166,17 @@ struct WasiNNEnvironment :
       return true;
     }
     return false;
+  }
+
+  void mdRemoveById(uint32_t GraphId) noexcept {
+    std::unique_lock Lock(MdMutex);
+    for (auto It = MdMap.begin(); It != MdMap.end();) {
+      if (It->second == static_cast<uint32_t>(GraphId)) {
+        It = MdMap.erase(It);
+      } else {
+        ++It;
+      }
+    }
   }
 
   Expect<WASINN::ErrNo>

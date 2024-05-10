@@ -228,6 +228,10 @@ private:
   Expect<void> instantiate(Runtime::Instance::ModuleInstance &ModInst,
                            const AST::MemorySection &MemSec);
 
+  /// Instantiateion of Tag Instances.
+  Expect<void> instantiate(Runtime::Instance::ModuleInstance &ModInst,
+                           const AST::TagSection &TagSec);
+
   /// Instantiation of Global Instances.
   Expect<void> instantiate(Runtime::StackManager &StackMgr,
                            Runtime::Instance::ModuleInstance &ModInst,
@@ -266,9 +270,13 @@ private:
 
   /// Helper function for branching to label.
   Expect<void> branchToLabel(Runtime::StackManager &StackMgr,
-                             uint32_t EraseBegin, uint32_t EraseEnd,
-                             int32_t PCOffset,
+                             const AST::Instruction::JumpDescriptor &JumpDesc,
                              AST::InstrView::iterator &PC) noexcept;
+
+  /// Helper function for throwing an exception.
+  Expect<void> throwException(Runtime::StackManager &StackMgr,
+                              Runtime::Instance::TagInstance &TagInst,
+                              AST::InstrView::iterator &PC) noexcept;
   /// @}
 
   /// \name Helper Functions for getting instances or types.
@@ -289,6 +297,10 @@ private:
   Runtime::Instance::MemoryInstance *
   getMemInstByIdx(Runtime::StackManager &StackMgr, const uint32_t Idx) const;
 
+  /// Helper function for get tag instance by index.
+  Runtime::Instance::TagInstance *
+  getTagInstByIdx(Runtime::StackManager &StackMgr, const uint32_t Idx) const;
+
   /// Helper function for get global instance by index.
   Runtime::Instance::GlobalInstance *
   getGlobInstByIdx(Runtime::StackManager &StackMgr, const uint32_t Idx) const;
@@ -304,6 +316,9 @@ private:
   /// Helper function for converting into bottom abstract heap type.
   TypeCode toBottomType(Runtime::StackManager &StackMgr,
                         const ValType &Type) const;
+
+  /// Helper function for clean the unused bits of numeric values in ValVariant.
+  void cleanNumericVal(ValVariant &Val, const ValType &Type) const noexcept;
   /// @}
 
   /// \name Run instructions functions
@@ -312,6 +327,12 @@ private:
   Expect<void> runIfElseOp(Runtime::StackManager &StackMgr,
                            const AST::Instruction &Instr,
                            AST::InstrView::iterator &PC) noexcept;
+  Expect<void> runThrowOp(Runtime::StackManager &StackMgr,
+                          const AST::Instruction &Instr,
+                          AST::InstrView::iterator &PC) noexcept;
+  Expect<void> runThrowRefOp(Runtime::StackManager &StackMgr,
+                             const AST::Instruction &Instr,
+                             AST::InstrView::iterator &PC) noexcept;
   Expect<void> runBrOp(Runtime::StackManager &StackMgr,
                        const AST::Instruction &Instr,
                        AST::InstrView::iterator &PC) noexcept;
@@ -345,6 +366,9 @@ private:
                                  const AST::Instruction &Instr,
                                  AST::InstrView::iterator &PC,
                                  bool IsTailCall = false) noexcept;
+  Expect<void> runTryTableOp(Runtime::StackManager &StackMgr,
+                             const AST::Instruction &Instr,
+                             AST::InstrView::iterator &PC) noexcept;
   /// ======= Variable instructions =======
   Expect<void> runLocalGetOp(Runtime::StackManager &StackMgr,
                              uint32_t StackOffset) const noexcept;

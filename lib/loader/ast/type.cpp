@@ -12,7 +12,11 @@ namespace Loader {
 Expect<ValType> Loader::loadHeapType(TypeCode TC, ASTNodeAttr From) {
   if (auto Res = FMgr.readS33()) {
     if (*Res < 0) {
-      // FuncRef or ExternRef case.
+      if (*Res < -64) {
+        // For checking the invalid s33 value which is larger than 1 byte.
+        return logLoadError(ErrCode::Value::MalformedRefType,
+                            FMgr.getLastOffset(), From);
+      }
       TypeCode HTCode =
           static_cast<TypeCode>(static_cast<uint8_t>((*Res) & INT64_C(0x7F)));
       switch (HTCode) {
@@ -39,6 +43,13 @@ Expect<ValType> Loader::loadHeapType(TypeCode TC, ASTNodeAttr From) {
       case TypeCode::ArrayRef:
         if (!Conf.hasProposal(Proposal::GC)) {
           return logNeedProposal(ErrCode::Value::MalformedRefType, Proposal::GC,
+                                 FMgr.getLastOffset(), From);
+        }
+        return ValType(TC, HTCode);
+      case TypeCode::ExnRef:
+        if (!Conf.hasProposal(Proposal::ExceptionHandling)) {
+          return logNeedProposal(ErrCode::Value::MalformedValType,
+                                 Proposal::ExceptionHandling,
                                  FMgr.getLastOffset(), From);
         }
         return ValType(TC, HTCode);
@@ -159,6 +170,13 @@ Expect<ValType> Loader::loadValType(ASTNodeAttr From, bool IsStorageType) {
     case TypeCode::ArrayRef:
       if (!Conf.hasProposal(Proposal::GC)) {
         return logNeedProposal(ErrCode::Value::MalformedValType, Proposal::GC,
+                               FMgr.getLastOffset(), From);
+      }
+      return ValType(Code);
+    case TypeCode::ExnRef:
+      if (!Conf.hasProposal(Proposal::ExceptionHandling)) {
+        return logNeedProposal(ErrCode::Value::MalformedValType,
+                               Proposal::ExceptionHandling,
                                FMgr.getLastOffset(), From);
       }
       return ValType(Code);
@@ -427,6 +445,31 @@ Expect<void> Loader::loadType(AST::GlobalType &GlobType) {
     GlobType.setValMut(*Res);
   } else {
     // The AST node information is handled.
+    return Unexpect(Res);
+  }
+  return {};
+}
+
+// Load binary to construct Tag node. See "include/loader/loader.h".
+Expect<void> Loader::loadType(AST::TagType &TgType) {
+  if (auto Res = FMgr.readByte()) {
+    // The preserved byte for future extension possibility for tag
+    // It supports only 0x00 currently, which is for exception handling.
+    if (unlikely(*Res != 0x00)) {
+      spdlog::error(ErrCode::Value::ExpectedZeroByte);
+      spdlog::error(ErrInfo::InfoLoading(FMgr.getLastOffset()));
+      return Unexpect(ErrCode::Value::ExpectedZeroByte);
+    }
+  } else {
+    spdlog::error(Res.error());
+    spdlog::error(ErrInfo::InfoLoading(FMgr.getLastOffset()));
+    return Unexpect(Res);
+  }
+  if (auto Res = FMgr.readU32()) {
+    TgType.setTypeIdx(*Res);
+  } else {
+    spdlog::error(Res.error());
+    spdlog::error(ErrInfo::InfoLoading(FMgr.getLastOffset()));
     return Unexpect(Res);
   }
   return {};

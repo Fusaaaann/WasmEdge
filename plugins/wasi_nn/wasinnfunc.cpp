@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2019-2022 Second State INC
 
 #include "wasinnfunc.h"
-#include "common/log.h"
+#include "common/spdlog.h"
 #include "wasinnenv.h"
 
 #include <string>
@@ -572,6 +572,34 @@ WasiNNFiniSingle::bodyImpl(const Runtime::CallingFrame &Frame,
   default:
     spdlog::error(
         "[WASI-NN] fini_single: Only GGML backend supports compute_single."sv);
+    return WASINN::ErrNo::InvalidArgument;
+  }
+}
+
+Expect<WASINN::ErrNo> WasiNNUnload::bodyImpl(const Runtime::CallingFrame &Frame,
+                                             uint32_t GraphId) {
+#ifdef WASMEDGE_BUILD_WASI_NN_RPC
+  if (Env.NNRPCChannel != nullptr) {
+    // TODO: implement RPC for unload
+    spdlog::error("[WASI-NN] RPC client is not implemented for unload"sv);
+    return WASINN::ErrNo::UnsupportedOperation;
+  }
+#endif
+  auto *MemInst = Frame.getMemoryByIndex(0);
+  if (MemInst == nullptr) {
+    return Unexpect(ErrCode::Value::HostFuncError);
+  }
+
+  if (Env.NNGraph.size() <= GraphId) {
+    spdlog::error("[WASI-NN] unload: GraphId {} does not exist."sv, GraphId);
+    return WASINN::ErrNo::InvalidArgument;
+  }
+
+  switch (Env.NNGraph[GraphId].getBackend()) {
+  case WASINN::Backend::GGML:
+    return WASINN::GGML::unload(Env, GraphId);
+  default:
+    spdlog::error("[WASI-NN] unlaod: Only GGML backend supports unload."sv);
     return WASINN::ErrNo::InvalidArgument;
   }
 }
