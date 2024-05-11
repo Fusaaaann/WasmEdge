@@ -26,6 +26,9 @@
 namespace WasmEdge::Host::WASINN::GGML {
 #ifdef WASMEDGE_PLUGIN_WASI_NN_BACKEND_GGML
 
+// Speculative Decoding
+#define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  100
+#define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
 namespace details {
 speculative_strategy stringViewToSpeculativeStrategy(std::string_view strategy) {
   if (strategy == "NONE"sv) return speculative_strategy::NONE;
@@ -356,6 +359,21 @@ Expect<ErrNo> parseMetadata(Graph &GraphRef, const std::string &Metadata,
     }
     else 
       GraphRef.NParallel = NParallel;
+  }
+  if (Doc.at_key("n-draft").error() == simdjson::SUCCESS) {
+    uint64_t NDraft = 0;
+    auto Err = Doc["n-draft"].get<uint64_t>().get(NDraft);
+    if (Err) {
+      spdlog::error(
+          "[WASI-NN] GGML backend: Unable to retrieve the n-draft option."sv);
+      return ErrNo::InvalidArgument;
+    }
+    if (GraphRef.SpeculativeStrategy != speculative_strategy::SPECULATIVE){
+      spdlog::warn(
+          "[WASI-NN] GGML backend: n-draft will not be set when not using speculative decoding."sv);
+    }
+    else 
+      GraphRef.NDraft = NDraft;
   }
   if (Doc.at_key("prob-accept").error() == simdjson::SUCCESS) {
     double ProbAccept = 0.0;
@@ -1003,6 +1021,17 @@ Expect<ErrNo> setInput(WasiNNEnvironment &Env, uint32_t ContextId,
     // Text only prompt.
     CxtRef.LlamaInputs = llama_tokenize(LlamaContext, Prompt, AddBos, true);
     CxtRef.LlamaNInputs = CxtRef.LlamaInputs.size();
+    // TODO: 
+    if (GraphRef.SpeculativeStrategy == speculative_strategy::SPECULATIVE) {
+        const bool DftAddBos = llama_should_add_bos_token(GraphRef.DraftLlamaModel);// TODO: should use 
+      spdlog::info("add_bos dft: {}\n"sv, DftAddBos);
+
+      if (AddBos != DftAddBos) {
+          spdlog::error("{}: error: draft model add_bos must match target model to use speculation but "sv, __func__);
+          spdlog::error("DftAddBos = {} while TgtAddBos = {}\n"sv, DftAddBos, AddBos);
+          return ErrNo::RuntimeError;
+      }
+    }
   } else {
     // Handle llava format prompt.
 
@@ -1086,6 +1115,35 @@ Expect<ErrNo> setInput(WasiNNEnvironment &Env, uint32_t ContextId,
     spdlog::info("[WASI-NN][Debug] GGML backend: set the input...Done"sv);
   }
 
+  if (GraphRef.SpeculativeStrategy == speculative_strategy::SPECULATIVE){
+      const int n_vocab_tgt = llama_n_vocab(GraphRef.LlamaModel);
+      const int n_vocab_dft = llama_n_vocab(GraphRef.DraftLlamaModel);
+      const int vocab_diff  = n_vocab_tgt > n_vocab_dft
+          ? n_vocab_tgt - n_vocab_dft
+          : n_vocab_dft - n_vocab_tgt;
+
+      if (vocab_diff > SPEC_VOCAB_MAX_SIZE_DIFFERENCE) {
+          spdlog::error("{}: error: draft model vocab must closely match target model to use speculation but "sv, __func__);
+          spdlog::error("target vocab size {} does not match draft vocab size {} - difference {}, max allowed {}\n"sv,
+                  n_vocab_tgt, llama_n_vocab(GraphRef.DraftLlamaModel), vocab_diff, SPEC_VOCAB_MAX_SIZE_DIFFERENCE);
+          return ErrNo::RuntimeError;
+      }
+
+      for (int i = SPEC_VOCAB_CHECK_START_TOKEN_ID; i < std::min(n_vocab_tgt, n_vocab_dft); ++i) {
+          const char * token_text_tgt = llama_token_get_text(GraphRef.LlamaModel, i);
+          const char * token_text_dft = llama_token_get_text(GraphRef.DraftLlamaModel, i);
+          if (std::strcmp(token_text_tgt, token_text_dft) != 0) {
+  auto DraftLlamaContext =
+      llama_new_context_with_model(GraphRef.DraftLlamaModel, ContextParams);
+
+              spdlog::error("{}: error: draft model vocab must match target model to use speculation but "sv, __func__);
+              spdlog::error("token {} content differs - target '{}', draft '{}'\n"sv, i,
+                      llama_token_to_piece(LlamaContext, i).c_str(),
+                      llama_token_to_piece(DraftLlamaContext, i).c_str());
+              return ErrNo::RuntimeError;
+          }
+      }
+  }
   // Delete the llama context.
   if (GraphRef.EnableDebugLog) {
     spdlog::info(

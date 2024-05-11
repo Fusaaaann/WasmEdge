@@ -13,7 +13,6 @@
 namespace WasmEdge::Host::WASINN::GGML {
 #ifdef WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
 
-void RecordMetric(const std::string& name, double value);
 class IDecodingStrategy {
 public:
   virtual ~IDecodingStrategy() = default;

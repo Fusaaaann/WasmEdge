@@ -63,6 +63,7 @@ struct Graph {
   double FrequencyPenalty = 0.00;
 #ifdef WASMEDGE_PLUGIN_WASI_NN_GGML_STRATEGY
   // speculative decoding, only when SpeculativeStrategy == SPECULATIVE
+  uint64_t NDraft = 1;
   uint64_t NParallel = 1; 
   double ProbAccept = 0.50;
   double ProbSplit = 0.10;

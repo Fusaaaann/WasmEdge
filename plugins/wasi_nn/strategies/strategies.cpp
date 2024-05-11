@@ -9,9 +9,6 @@
 namespace WasmEdge::Host::WASINN::GGML {
 
 
-// Speculative Decoding
-#define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  100
-#define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
 
 struct seq_draft {
   bool active   = false;
@@ -118,6 +115,10 @@ ErrNo setupContextParam(Graph &GraphRef,
 }
 
 ErrNo DefaultDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
+  if (!spdlog::get("metrics")){
+    spdlog::error("metric logger not found"sv);
+    return ErrNo::RuntimeError;
+  }
   gpt_params GPTParams;
   llama_context_params ContextParams = llama_context_default_params();
   details2::setupGPTParam(GraphRef, GPTParams);
@@ -137,7 +138,7 @@ ErrNo DefaultDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
   auto ReturnCode = ErrNo::Success;
 
   // Check if the input is too long.
-  if (static_cast<uint64_t>(CxtRef.LlamaInputs.size()) > MaxTokensListSize) {// TODO: where to obtain llamamodel
+  if (static_cast<uint64_t>(CxtRef.LlamaInputs.size()) > MaxTokensListSize) {
       if (GraphRef.EnableLog) {
       spdlog::info("[WASI-NN] GGML backend: the prompt is too long. Your input "
                   "has {} tokens. Please reduce it to {} tokens."sv,
@@ -173,7 +174,7 @@ ErrNo DefaultDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
 
     // Save the output token.
     CxtRef.LlamaOutputTokens.emplace_back(Id);
-    CxtRef.LlamaOutputs += llama_token_to_piece(LlamaContext, Id);
+    CxtRef.LlamaOutputs += llama_token_to_piece(LlamaContext, Id); // TODO: this seems to be the crucial statement for getting tokens back to output
     // When setting StreamStdout, we print the output to stdout.
     if (GraphRef.StreamStdout) {
     std::cout << llama_token_to_piece(LlamaContext, Id) << std::flush;
@@ -199,12 +200,12 @@ ErrNo DefaultDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
     if (ReturnCode != ErrNo::Success) {
       break;
     }
-    spdlog::get("metrics")->trace("{}"sv, SimpleJSON({
+    if(spdlog::get("metrics"))spdlog::get("metrics")->trace("{}"sv, SimpleJSON({
         {"event", "decoded_one_batch"},
         {"ggml_time", ggml_time_us()}
     })); 
   }
-  spdlog::get("metrics")->trace("{}"sv, SimpleJSON({
+  if(spdlog::get("metrics"))spdlog::get("metrics")->trace("{}"sv, SimpleJSON({
       {"event", "decode_done"},
       {"ggml_time", ggml_time_us()}
   }));  
@@ -235,82 +236,30 @@ ErrNo SpeculativeDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
   llama_context_params ContextParams = llama_context_default_params();
   details2::setupGPTParam(GraphRef, GPTParams);
   details2::setupContextParam(GraphRef, ContextParams);
-  // auto LlamaContext =
-  //     llama_new_context_with_model(GraphRef.LlamaModel, ContextParams);
-  // Implement standard decoding logic here
-  // max number of parallel drafting sequences (i.e. tree branches)
-  const int n_seq_dft = GPTParams.n_parallel;
+     
+  const int n_seq_dft = GraphRef.NParallel;
 
-  // probability threshold for accepting a token from the draft model
-  const float p_accept = GPTParams.p_accept;
+  const float p_accept = GraphRef.ProbAccept;
 
-  // probability threshold for splitting a draft branch (only for n_seq_dft > 1)
-  const float p_split  = GPTParams.p_split;
+  const float p_split  = GraphRef.ProbSplit;
 
 
 
-  llama_model * model_tgt = NULL;
-  llama_model * model_dft = NULL;
+  llama_model * model_tgt = GraphRef.LlamaModel;
+//   llama_model * model_dft = GraphRef.DraftLlamaModel;
 
-  llama_context * ctx_tgt = NULL;
-  llama_context * ctx_dft = NULL;
-
-  // load the target model
-  GPTParams.logits_all = true;
-  std::tie(model_tgt, ctx_tgt) = llama_init_from_gpt_params(GPTParams);
-
-  // load the draft model
-  GPTParams.model = GPTParams.model_draft;
-  GPTParams.n_gpu_layers = GPTParams.n_gpu_layers_draft;
-  if (GPTParams.n_threads_draft > 0) {
-      GPTParams.n_threads = GPTParams.n_threads_draft;
-  }
-  GPTParams.n_threads_batch = GPTParams.n_threads_batch_draft;
-  std::tie(model_dft, ctx_dft) = llama_init_from_gpt_params(GPTParams);
-
-  {
-      const int n_vocab_tgt = llama_n_vocab(model_tgt);
-      const int n_vocab_dft = llama_n_vocab(model_dft);
-      const int vocab_diff  = n_vocab_tgt > n_vocab_dft
-          ? n_vocab_tgt - n_vocab_dft
-          : n_vocab_dft - n_vocab_tgt;
-
-      if (vocab_diff > SPEC_VOCAB_MAX_SIZE_DIFFERENCE) {
-          spdlog::error("{}: error: draft model vocab must closely match target model to use speculation but "sv, __func__);
-          spdlog::error("target vocab size {} does not match draft vocab size {} - difference {}, max allowed {}\n"sv,
-                  n_vocab_tgt, llama_n_vocab(model_dft), vocab_diff, SPEC_VOCAB_MAX_SIZE_DIFFERENCE);
-          return ErrNo::RuntimeError;
-      }
-
-      for (int i = SPEC_VOCAB_CHECK_START_TOKEN_ID; i < std::min(n_vocab_tgt, n_vocab_dft); ++i) {
-          const char * token_text_tgt = llama_token_get_text(model_tgt, i);
-          const char * token_text_dft = llama_token_get_text(model_dft, i);
-          if (std::strcmp(token_text_tgt, token_text_dft) != 0) {
-              spdlog::error("{}: error: draft model vocab must match target model to use speculation but "sv, __func__);
-              spdlog::error("token {} content differs - target '{}', draft '{}'\n"sv, i,
-                      llama_token_to_piece(ctx_tgt, i).c_str(),
-                      llama_token_to_piece(ctx_dft, i).c_str());
-              return ErrNo::RuntimeError;
-          }
-      }
-  }
+  llama_context * ctx_tgt = 
+    llama_new_context_with_model(GraphRef.LlamaModel, ContextParams);;
+  llama_context * ctx_dft = 
+    llama_new_context_with_model(GraphRef.DraftLlamaModel, ContextParams); // use same context params between draft and target, temporarily
 
 
-  // Tokenize the prompt
-  const bool add_bos_tgt = llama_should_add_bos_token(model_tgt);
-  spdlog::info("add_bos tgt: {}\n"sv, add_bos_tgt);
 
-  const bool add_bos_dft = llama_should_add_bos_token(model_dft);
-  spdlog::info("add_bos dft: {}\n"sv, add_bos_dft);
 
-  if (add_bos_tgt != add_bos_dft) {
-      spdlog::error("{}: error: draft model add_bos must match target model to use speculation but "sv, __func__);
-      spdlog::error("add_bos_dft = {} while add_bos_tgt = {}\n"sv, add_bos_dft, add_bos_tgt);
-      return ErrNo::RuntimeError;
-  }
+
 
   std::vector<llama_token> inp;
-  inp = ::llama_tokenize(ctx_tgt, GPTParams.prompt, add_bos_tgt, true);
+  inp = CxtRef.LlamaInputs;
 
   const int max_context_size     = llama_n_ctx(ctx_tgt);
   const int max_tokens_list_size = max_context_size - 4;
@@ -320,33 +269,22 @@ ErrNo SpeculativeDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
       return ErrNo::RuntimeError;
   }
 
-  spdlog::error("\n\n");
 
-  for (auto id : inp) {
-      spdlog::error("{}"sv, llama_token_to_piece(ctx_tgt, id).c_str());
-  }
 
-  fflush(stderr);
 
   const int n_input = inp.size();
-  spdlog::info("[WASI-NN][Debug] GGML backend: n_input {}"sv,n_input);
+  // spdlog::info("[WASI-NN][Debug] GGML backend: n_input {}"sv,n_input);
 
-  // const auto t_enc_start = ggml_time_us();
 
   // eval the prompt with both models
   llama_decode(ctx_tgt, llama_batch_get_one( inp.data(), n_input - 1, 0,           0));
   llama_decode(ctx_tgt, llama_batch_get_one(&inp.back(),           1, n_input - 1, 0));
   llama_decode(ctx_dft, llama_batch_get_one( inp.data(), n_input,     0,           0));
 
-  // const auto t_enc_end = ggml_time_us();
 
-  // the 2 models should have the same vocab
-  //GGML_ASSERT(n_vocab == llama_n_vocab(model_dft));
+  int n_draft = GraphRef.NDraft;
 
-  // how many tokens to draft each time
-  int n_draft = GPTParams.n_draft;
-
-  int n_predict = 0;
+  int n_predict = GraphRef.NPredict;
   int n_drafted = 0;
   int n_accept  = 0;
 
@@ -364,7 +302,7 @@ ErrNo SpeculativeDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
 
   GPTParams.sparams.grammar.clear(); // the draft samplers will copy the target sampler's grammar
   GPTParams.sparams.temp = -1.0f;    // force greedy sampling with probs for the draft model
-    spdlog::get("metrics")->trace("{}"sv, SimpleJSON({
+    if(spdlog::get("metrics"))spdlog::get("metrics")->trace("{}"sv, SimpleJSON({
         {"event", "decode_start"},
         {"ggml_time", ggml_time_us()}
     })); 
@@ -373,8 +311,8 @@ ErrNo SpeculativeDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
       drafts[s].CtxSampling = llama_sampling_init(GPTParams.sparams);
   }
 
-  llama_batch batch_dft = llama_batch_init(GPTParams.n_ctx, 0, 1);
-  llama_batch batch_tgt = llama_batch_init(GPTParams.n_ctx, 0, n_seq_dft);
+  llama_batch batch_dft = llama_batch_init(max_context_size, 0, 1);
+  llama_batch batch_tgt = llama_batch_init(max_context_size, 0, n_seq_dft);
 
   // const auto t_dec_start = ggml_time_us();
 
@@ -382,39 +320,34 @@ ErrNo SpeculativeDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
   drafts[0].IBatchTgt.resize(1);
   drafts[0].IBatchTgt[0] = 0;
 
-  while (true) {
+  while (n_predict > 0) {
       // print current draft sequences
       for (int s = 0; s < n_seq_dft; ++s) {
           if (!drafts[s].active) {
               continue;
           }
 
-          const auto & tokens = drafts[s].tokens;
+          // const auto & tokens = drafts[s].tokens;
 
-          spdlog::info("draft {}: {}\n"sv, s, LOG_TOKENS_TOSTR_PRETTY(ctx_dft, tokens).c_str());
+          // spdlog::info("draft {}: {}\n"sv, s, LOG_TOKENS_TOSTR_PRETTY(ctx_dft, tokens).c_str());
       }
 
       int i_dft  = 0;
       int s_keep = 0;
 
-      while (true) {
-          spdlog::info("sampling target: s_keep = {}, i_dft = {}, IBatchTgt = {}\n"sv, s_keep, i_dft, drafts[s_keep].IBatchTgt[i_dft]);
+      while (n_predict > 0) {
+          // spdlog::info("sampling target: s_keep = {}, i_dft = {}, IBatchTgt = {}\n"sv, s_keep, i_dft, drafts[s_keep].IBatchTgt[i_dft]);
 
           // sample from the target model
           llama_token id = llama_sampling_sample(CtxSampling, ctx_tgt, NULL, drafts[s_keep].IBatchTgt[i_dft]);
 
           llama_sampling_accept(CtxSampling, ctx_tgt, id, true);
-
-          //spdlog::info("last: {}\n"sv, LOG_TOKENS_TOSTR_PRETTY(ctx_tgt, CtxSampling->prev).c_str());
-
-          // const std::string token_str = llama_token_to_piece(ctx_tgt, id);// TODO: potential bottleneck: detokenizer
-
-
+          // const std::string token_str = llama_token_to_piece(ctx_tgt, id);// for debug
           if (id == llama_token_eos(model_tgt)) {
               has_eos = true;
           }
 
-          ++n_predict;
+          --n_predict;
 
           // check if the target token matches any of the drafts
           {
@@ -445,13 +378,13 @@ ErrNo SpeculativeDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
               }
           }
           CxtRef.LlamaOutputTokens.emplace_back(id);
-
+          CxtRef.LlamaOutputs += llama_token_to_piece(ctx_tgt, id);
           if(has_eos) break;
 
           // spdlog::info("the sampled target token ({}, '{}') did not match, or we ran out of drafted tokens\n"sv, id, token_str.c_str());
 
           {
-              spdlog::info("keeping sequence {}, n_past_tgt = {}, n_past_dft = {}\n"sv, s_keep, n_past_tgt, n_past_dft);
+              // spdlog::info("keeping sequence {}, n_past_tgt = {}, n_past_dft = {}\n"sv, s_keep, n_past_tgt, n_past_dft);
 
               llama_kv_cache_seq_keep(ctx_dft, s_keep);
               llama_kv_cache_seq_cp  (ctx_dft, s_keep, 0, -1, -1);
@@ -504,7 +437,6 @@ ErrNo SpeculativeDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
       // sample n_draft tokens from the draft model using tree-based sampling
       for (int i = 0; i < n_draft; ++i) {
           batch_dft.n_tokens = 0;
-
           for (int s = 0; s < n_seq_dft; ++s) {
               drafts[s].skip = false;
           }
@@ -518,13 +450,13 @@ ErrNo SpeculativeDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
 
               const auto & cur_p = drafts[s].CtxSampling->cur;
 
-              for (int k = 0; k < std::min(n_seq_dft + 3, (int) cur_p.size()); ++k) {
-                  spdlog::info(" - draft candidate {} for seq {}, pos {}: %6d (%8.3f) '{}'\n"sv,
-                          k, s, i, cur_p[k].id, cur_p[k].p, llama_token_to_piece(ctx_dft, cur_p[k].id).c_str());
-              }
+              // for (int k = 0; k < std::min(n_seq_dft + 3, (int) cur_p.size()); ++k) {
+              //     spdlog::info(" - draft candidate {} for seq {}, pos {}: %6d (%8.3f) '{}'\n"sv,
+              //             k, s, i, cur_p[k].id, cur_p[k].p, llama_token_to_piece(ctx_dft, cur_p[k].id).c_str());
+              // }
 
               if (cur_p[0].p < p_accept) {
-                  spdlog::info("stopping drafting for seq {}, probability too low: {} < {}\n"sv, s, cur_p[0].p, p_accept);
+                  // spdlog::info("stopping drafting for seq {}, probability too low: {} < {}\n"sv, s, cur_p[0].p, p_accept);
                   drafts[s].drafting = false;
                   continue;
               }
@@ -534,7 +466,7 @@ ErrNo SpeculativeDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
               // attempt to split the branch if the probability is high enough
               for (int f = 1; f < 8; ++f) {
                   if (n_seq_cur < n_seq_dft && cur_p[f].p > p_split) {
-                      spdlog::info("splitting seq {} into {}\n"sv, s, n_seq_cur);
+                      // spdlog::info("splitting seq {} into {}\n"sv, s, n_seq_cur);
 
                       llama_kv_cache_seq_rm(ctx_dft,    n_seq_cur, -1, -1);
                       llama_kv_cache_seq_cp(ctx_dft, s, n_seq_cur, -1, -1);
@@ -609,7 +541,6 @@ ErrNo SpeculativeDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
               break;
           }
       }
-
       // evaluate the target model on the drafted tokens
       {
           llama_kv_cache_seq_keep(ctx_tgt, 0);
@@ -628,30 +559,32 @@ ErrNo SpeculativeDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
               continue;
           }
 
-          drafts[s].tokens.erase(drafts[s].tokens.begin());
+
+        if(!drafts[s].tokens.empty())drafts[s].tokens.erase(drafts[s].tokens.begin());
       }
-    spdlog::get("metrics")->trace("{}"sv, SimpleJSON({
+    if(spdlog::get("metrics"))spdlog::get("metrics")->trace("{}"sv, SimpleJSON({
         {"event", "decoded_one_batch"},
         {"ggml_time", ggml_time_us()}
     }));  
   }
-  spdlog::get("metrics")->trace("{}"sv, SimpleJSON({
+  if(spdlog::get("metrics"))spdlog::get("metrics")->trace("{}"sv, SimpleJSON({
       {"event", "decode_done"},
       {"ggml_time", ggml_time_us()}
   }));  
+  // TODO: no id emplaced into llamaoutput
   // auto t_dec_end = ggml_time_us();
   llama_sampling_free(CtxSampling);
   for (int s = 0; s < n_seq_dft; ++s) {
       llama_sampling_free(drafts[s].CtxSampling);
   }
-
   llama_batch_free(batch_dft);
+  llama_batch_free(batch_tgt); // declared but not freed
 
   llama_free(ctx_tgt);
-  llama_free_model(model_tgt);
+//   llama_free_model(model_tgt); // TODO: maybe unnecessary
 
   llama_free(ctx_dft);
-  llama_free_model(model_dft);
+//   llama_free_model(model_dft);  // TODO: maybe unnecessary
 
   return ErrNo::Success;
 }
@@ -668,19 +601,20 @@ ErrNo LookaheadDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
   const int MaxVerifyNgramSize = GraphRef.MaxVerifyNgramSize;
   
   llama_context * LlamaContext = 
-      llama_new_context_with_model(GraphRef.LlamaModel, ContextParams);// TODO: use WasmEdge parameter
+      llama_new_context_with_model(GraphRef.LlamaModel, ContextParams);
   llama_batch batch = llama_batch_init(GPTParams.n_ctx, 0, LookaheadWidth + MaxVerifyNgramSize + 1);
 
   // load the target model
-  std::tie(GraphRef.LlamaModel, LlamaContext) = llama_init_from_gpt_params(GPTParams);
 
   std::vector<llama_token> inp;
   std::vector<llama_token> all;
 
   // Tokenize the prompt
-  const bool add_bos = llama_should_add_bos_token(GraphRef.LlamaModel);
+//   const bool add_bos = llama_should_add_bos_token(GraphRef.LlamaModel);
 
-  inp = llama_tokenize(LlamaContext, GPTParams.prompt, add_bos, true);
+//   inp = llama_tokenize(LlamaContext, GPTParams.prompt, add_bos, true);
+    inp = CxtRef.LlamaInputs;
+
   all = inp;
 
   const int n_input = inp.size();
@@ -696,7 +630,7 @@ ErrNo LookaheadDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
 
   // const auto t_enc_end = ggml_time_us();
 
-  int n_predict = 0;
+  int NRemain = GraphRef.NPredict;
   int n_accept  = 0;
 
   int NPast = inp.size();
@@ -726,7 +660,7 @@ ErrNo LookaheadDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
           } else {
               // initialize with a sequence of increasing numbers
               tokens_j[j][i] = 100 + i;
-          }
+          } 
       }
   }
 
@@ -756,26 +690,26 @@ ErrNo LookaheadDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
 
       llama_sampling_accept(CtxSampling, LlamaContext, id, true);
 
-      {
-          const std::string token_str = llama_token_to_piece(LlamaContext, id);
+      // {
+      //     const std::string token_str = llama_token_to_piece(LlamaContext, id);
 
-          spdlog::info("{}"sv, token_str.c_str());
-          fflush(stdout);
-      }
+      //     spdlog::info("{}"sv, token_str.c_str());
+      //     fflush(stdout);
+      // }
   }
     uint32_t NCtx = llama_n_ctx(LlamaContext);
 
   // End the inference if the context is full.
   if (NPast + static_cast<uint32_t>(inp.size()) > NCtx) {
     if (GraphRef.EnableLog) {
-      spdlog::info(
+      spdlog::error(
           "[WASI-NN] GGML backend: the context if full ({} / {} tokens). Please increase your context size."sv,
           NPast + static_cast<uint32_t>(inp.size()), NCtx);
     }
     return ErrNo::ContextFull;
   }
 
-  while (true) {
+  while (NRemain > 0) {
       // debug
       // if (dump_kv_cache) {
       //     llama_kv_cache_view_update(LlamaContext, &KVCView);
@@ -900,6 +834,7 @@ ErrNo LookaheadDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
           // print
           {
             CxtRef.LlamaOutputTokens.emplace_back(id);
+            CxtRef.LlamaOutputs += llama_token_to_piece(LlamaContext, id);
               // const std::string token_str = llama_token_to_piece(LlamaContext, id);
 
               // if (v == 0) {
@@ -917,7 +852,7 @@ ErrNo LookaheadDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
               all.push_back(id);
           }
 
-          ++n_predict;
+          --NRemain;
           ++NPast;
 
           // verify across active n-grams
@@ -934,25 +869,25 @@ ErrNo LookaheadDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
           }
 
           // print known n-grams starting with token id (debug)
-          if (0 && v == 0) {
-              if (ngrams_observed.cnt[id] > 0) {
-                  spdlog::info("\n - {} n-grams starting with '{}'\n"sv, ngrams_observed.cnt[id], llama_token_to_piece(LlamaContext, id).c_str());
-              }
+          // if (0 && v == 0) {
+          //     if (ngrams_observed.cnt[id] > 0) {
+          //         spdlog::info("\n - {} n-grams starting with '{}'\n"sv, ngrams_observed.cnt[id], llama_token_to_piece(LlamaContext, id).c_str());
+          //     }
 
-              for (int i = 0; i < ngrams_observed.cnt[id]; i++) {
-                  spdlog::info("   - ngram %2d: "sv, i);
+          //     for (int i = 0; i < ngrams_observed.cnt[id]; i++) {
+          //         spdlog::info("   - ngram %2d: "sv, i);
 
-                  const int idx = id*(NgramSize - 1)*MaxVerifyNgramSize + i*(NgramSize - 1);
+          //         const int idx = id*(NgramSize - 1)*MaxVerifyNgramSize + i*(NgramSize - 1);
 
-                  for (int j = 0; j < NgramSize - 1; j++) {
-                      const std::string token_str = llama_token_to_piece(LlamaContext, ngrams_observed.tokens[idx + j]);
+          //         for (int j = 0; j < NgramSize - 1; j++) {
+          //             const std::string token_str = llama_token_to_piece(LlamaContext, ngrams_observed.tokens[idx + j]);
 
-                      spdlog::info("{}"sv, token_str.c_str());
-                  }
+          //             spdlog::info("{}"sv, token_str.c_str());
+          //         }
 
-                  spdlog::info("\n");
-              }
-          }
+          //         spdlog::info("\n");
+          //     }
+          // }
           if(has_eos)break;
 
           // update lookahead tokens
@@ -1055,13 +990,13 @@ ErrNo LookaheadDecoding::decode(Graph &GraphRef, Context &CxtRef) noexcept {
               llama_kv_cache_seq_cp(LlamaContext, 0, s, -1, -1);
           }
       }
-    spdlog::get("metrics")->trace("{}"sv, SimpleJSON({
+    if(spdlog::get("metrics"))spdlog::get("metrics")->trace("{}"sv, SimpleJSON({
         {"event", "decoded_one_batch"},
         {"ggml_time", ggml_time_us()}
     })); 
 
   }
-  spdlog::get("metrics")->trace("{}"sv, SimpleJSON({
+  if(spdlog::get("metrics"))spdlog::get("metrics")->trace("{}"sv, SimpleJSON({
       {"event", "decode_done"},
       {"ggml_time", ggml_time_us()}
   }));  
